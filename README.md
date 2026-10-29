@@ -4,7 +4,7 @@ Telegram bot for creating and managing personal music playlists.
 
 ## Current status
 
-This project is currently at the initial scaffold stage. Bot handlers and database models will be added in the next stages.
+The project currently connects to Telegram, supports Persian and English language selection, and responds to `/start`. Database models and playlist features will be added in the next stages.
 
 ## Requirements
 
@@ -43,9 +43,13 @@ Never commit `.env` to GitHub.
 
 ### 4. Run the project
 
+Make sure `.env` contains a valid token from BotFather.
+
 ```bash
 python main.py
 ```
+
+Then open your bot in Telegram and send `/start`.
 
 ## Project structure
 

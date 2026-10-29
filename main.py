@@ -1,11 +1,21 @@
 """Application entry point for the Playlist Music Bot."""
 
+import asyncio
 
-def main() -> None:
-    """Run the application."""
-    print("Playlist Music Bot scaffold is ready.")
+from app.bot import create_bot, create_dispatcher
+
+
+async def main() -> None:
+    """Start the bot and listen for Telegram updates."""
+    bot = create_bot()
+    dispatcher = create_dispatcher()
+
+    try:
+        await dispatcher.start_polling(bot)
+    finally:
+        await bot.session.close()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
 
