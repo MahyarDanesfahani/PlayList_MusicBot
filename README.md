@@ -1,5 +1,7 @@
 # Playlist Music Bot
 
+Version: `1.0.0`
+
 Telegram bot for creating and managing personal music playlists.
 
 ## Current status
@@ -10,6 +12,14 @@ The project currently connects to Telegram, supports Persian and English languag
 
 - Python 3.11 or newer
 - A Telegram bot token from [@BotFather](https://t.me/BotFather)
+
+## Features in v1.0.0
+
+- Persian and English language selection
+- User registration with SQLite
+- Create, list, and delete playlists
+- Add audio files to playlists
+- List, resend, and delete songs
 
 ## Local setup
 
@@ -50,6 +60,27 @@ python main.py
 ```
 
 Then open your bot in Telegram and send `/start`. The first run creates the local `playlist_bot.db` database automatically. To add a song, open a playlist, choose **Add song**, and send an audio file. Use `/playlists` to open your playlists quickly.
+
+## Docker
+
+```bash
+docker build -t playlist-music-bot .
+docker run --env-file .env playlist-music-bot
+```
+
+For production, mount a persistent volume for `playlist_bot.db` or use PostgreSQL through `DATABASE_URL`.
+
+## Release v1.0.0
+
+After verifying the bot locally:
+
+```bash
+git add .
+git commit -m "release: prepare version 1.0.0"
+git push
+git tag -a v1.0.0 -m "Release version 1.0.0"
+git push origin v1.0.0
+```
 
 ## Project structure
 
