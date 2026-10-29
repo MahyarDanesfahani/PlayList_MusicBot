@@ -17,6 +17,7 @@ session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_comm
 async def init_db() -> None:
     """Create database tables if they do not exist yet."""
     from app.models.playlist import Playlist  # noqa: F401
+    from app.models.song import Song  # noqa: F401
     from app.models.user import User  # noqa: F401
 
     async with engine.begin() as connection:

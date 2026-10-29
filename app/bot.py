@@ -10,8 +10,9 @@ from sqlalchemy import delete, select
 from app.config import get_bot_token
 from app.database.session import get_session
 from app.keyboards.language import language_keyboard
-from app.keyboards.playlist import main_menu, playlist_actions
+from app.keyboards.playlist import main_menu, playlist_actions, song_actions
 from app.models.playlist import Playlist
+from app.models.song import Song
 from app.models.user import User
 
 
@@ -23,6 +24,12 @@ class PlaylistCreation(StatesGroup):
     """States used while creating a playlist."""
 
     waiting_for_name = State()
+
+
+class SongAddition(StatesGroup):
+    """State used while waiting for an audio file."""
+
+    waiting_for_audio = State()
 
 
 MESSAGES = {
@@ -39,6 +46,12 @@ MESSAGES = {
             "list": "پلی‌لیست‌های تو:",
             "created": "پلی‌لیست «{name}» ساخته شد.",
             "deleted": "پلی‌لیست حذف شد.",
+            "ask_audio": "فایل صوتی آهنگ را ارسال کن:",
+            "audio_only": "لطفاً یک فایل صوتی ارسال کن.",
+            "song_added": "آهنگ به پلی‌لیست اضافه شد.",
+            "songs": "آهنگ‌های پلی‌لیست:",
+            "no_songs": "این پلی‌لیست هنوز آهنگی ندارد.",
+            "song_deleted": "آهنگ حذف شد.",
     },
     "en": {
         "choose": "Please choose your language:",
@@ -53,6 +66,12 @@ MESSAGES = {
             "list": "Your playlists:",
             "created": "Playlist “{name}” was created.",
             "deleted": "Playlist deleted.",
+            "ask_audio": "Send the audio file you want to add:",
+            "audio_only": "Please send an audio file.",
+            "song_added": "The song was added to the playlist.",
+            "songs": "Playlist songs:",
+            "no_songs": "This playlist has no songs yet.",
+            "song_deleted": "Song deleted.",
     },
 }
 
@@ -205,6 +224,123 @@ async def delete_playlist(callback: CallbackQuery) -> None:
             )
             await session.commit()
     await callback.message.edit_text(MESSAGES[language]["deleted"])
+    await callback.answer()
+
+
+async def owned_playlist(session, telegram_id: int, playlist_id: int) -> Playlist | None:
+    """Return a playlist only when it belongs to the Telegram user."""
+    user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+    if user is None:
+        return None
+    return await session.scalar(
+        select(Playlist).where(Playlist.id == playlist_id, Playlist.user_id == user.id)
+    )
+
+
+@router.callback_query(lambda callback: callback.data and callback.data.startswith("playlist:addsong:"))
+async def add_song_start(callback: CallbackQuery, state: FSMContext) -> None:
+    """Start adding a song to a playlist."""
+    if not callback.from_user or not callback.message or not callback.data:
+        return
+    playlist_id = int(callback.data.rsplit(":", maxsplit=1)[1])
+    language = await get_user_language(callback.from_user.id)
+    async with get_session() as session:
+        playlist = await owned_playlist(session, callback.from_user.id, playlist_id)
+    if playlist is None:
+        await callback.answer("Playlist not found", show_alert=True)
+        return
+    await state.update_data(playlist_id=playlist_id)
+    await state.set_state(SongAddition.waiting_for_audio)
+    await callback.message.answer(MESSAGES[language]["ask_audio"])
+    await callback.answer()
+
+
+@router.message(SongAddition.waiting_for_audio)
+async def add_song(message: Message, state: FSMContext) -> None:
+    """Save an uploaded Telegram audio file to the selected playlist."""
+    if not message.from_user:
+        return
+    language = await get_user_language(message.from_user.id)
+    if message.audio is None:
+        await message.answer(MESSAGES[language]["audio_only"])
+        return
+
+    state_data = await state.get_data()
+    playlist_id = state_data.get("playlist_id")
+    if playlist_id is None:
+        await state.clear()
+        return
+
+    async with get_session() as session:
+        playlist = await owned_playlist(session, message.from_user.id, playlist_id)
+        if playlist is None:
+            await state.clear()
+            return
+        session.add(
+            Song(
+                playlist_id=playlist_id,
+                file_id=message.audio.file_id,
+                title=message.audio.title,
+                performer=message.audio.performer,
+                duration=message.audio.duration,
+            )
+        )
+        await session.commit()
+
+    await state.clear()
+    await message.answer(MESSAGES[language]["song_added"], reply_markup=main_menu(language))
+
+
+@router.callback_query(lambda callback: callback.data and callback.data.startswith("playlist:songs:"))
+async def list_songs(callback: CallbackQuery) -> None:
+    """List songs belonging to a user's playlist."""
+    if not callback.from_user or not callback.message or not callback.data:
+        return
+    playlist_id = int(callback.data.rsplit(":", maxsplit=1)[1])
+    language = await get_user_language(callback.from_user.id)
+    async with get_session() as session:
+        playlist = await owned_playlist(session, callback.from_user.id, playlist_id)
+        songs = []
+        if playlist:
+            result = await session.scalars(
+                select(Song).where(Song.playlist_id == playlist_id).order_by(Song.id)
+            )
+            songs = list(result)
+    if playlist is None:
+        await callback.answer("Playlist not found", show_alert=True)
+    elif not songs:
+        await callback.message.answer(MESSAGES[language]["no_songs"])
+        await callback.answer()
+    else:
+        await callback.message.answer(MESSAGES[language]["songs"])
+        for song in songs:
+            label = song.title or song.performer or "Untitled song"
+            await callback.message.answer(
+                f"🎵 {label}", reply_markup=song_actions(song.id, language)
+            )
+        await callback.answer()
+
+
+@router.callback_query(lambda callback: callback.data and callback.data.startswith("song:delete:"))
+async def delete_song(callback: CallbackQuery) -> None:
+    """Delete a song only if it belongs to one of the user's playlists."""
+    if not callback.from_user or not callback.message or not callback.data:
+        return
+    song_id = int(callback.data.rsplit(":", maxsplit=1)[1])
+    language = await get_user_language(callback.from_user.id)
+    async with get_session() as session:
+        user = await session.scalar(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )
+        if user:
+            await session.execute(
+                delete(Song).where(
+                    Song.id == song_id,
+                    Song.playlist_id.in_(select(Playlist.id).where(Playlist.user_id == user.id)),
+                )
+            )
+            await session.commit()
+    await callback.message.edit_text(MESSAGES[language]["song_deleted"])
     await callback.answer()
 
 

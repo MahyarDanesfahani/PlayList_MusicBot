@@ -4,7 +4,7 @@ Telegram bot for creating and managing personal music playlists.
 
 ## Current status
 
-The project currently connects to Telegram, supports Persian and English language selection, and stores registered users and their language preference in SQLite. Playlist features will be added in the next stages.
+The project currently connects to Telegram, supports Persian and English language selection, and stores users, playlists, and songs in SQLite.
 
 ## Requirements
 
@@ -49,7 +49,7 @@ Make sure `.env` contains a valid token from BotFather.
 python main.py
 ```
 
-Then open your bot in Telegram and send `/start`. The first run creates the local `playlist_bot.db` database automatically.
+Then open your bot in Telegram and send `/start`. The first run creates the local `playlist_bot.db` database automatically. To add a song, open a playlist, choose **Add song**, and send an audio file.
 
 ## Project structure
 
