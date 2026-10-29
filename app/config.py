@@ -8,6 +8,9 @@ load_dotenv()
 
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", "sqlite+aiosqlite:///./playlist_bot.db"
+)
 
 
 def get_bot_token() -> str:
@@ -18,4 +21,9 @@ def get_bot_token() -> str:
             "and add your Telegram bot token."
         )
     return BOT_TOKEN
+
+
+def get_database_url() -> str:
+    """Return the configured database connection URL."""
+    return DATABASE_URL
 

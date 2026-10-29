@@ -3,10 +3,12 @@
 import asyncio
 
 from app.bot import create_bot, create_dispatcher
+from app.database.base import init_db
 
 
 async def main() -> None:
     """Start the bot and listen for Telegram updates."""
+    await init_db()
     bot = create_bot()
     dispatcher = create_dispatcher()
 
