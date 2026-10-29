@@ -3,7 +3,7 @@
 from aiogram import Bot, Dispatcher, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import delete, select
 
@@ -98,6 +98,50 @@ async def start_handler(message: Message) -> None:
         "زبان خود را انتخاب کنید / Please choose your language:",
         reply_markup=language_keyboard(),
     )
+
+
+@router.message(Command("playlists"))
+async def playlists_command(message: Message) -> None:
+    """Provide quick access to the user's playlists."""
+    if not message.from_user:
+        return
+    language = await get_user_language(message.from_user.id)
+    async with get_session() as session:
+        user = await session.scalar(
+            select(User).where(User.telegram_id == message.from_user.id)
+        )
+        has_playlists = False
+        if user:
+            has_playlists = (
+                await session.scalar(
+                    select(Playlist.id).where(Playlist.user_id == user.id).limit(1)
+                )
+            ) is not None
+    if has_playlists:
+        await message.answer(MESSAGES[language]["list"], reply_markup=main_menu(language))
+        await list_user_playlists(message, language)
+    else:
+        await message.answer(MESSAGES[language]["empty"], reply_markup=main_menu(language))
+
+
+async def list_user_playlists(message: Message, language: str) -> None:
+    """Send the user's playlists with their action buttons."""
+    if not message.from_user:
+        return
+    async with get_session() as session:
+        user = await session.scalar(
+            select(User).where(User.telegram_id == message.from_user.id)
+        )
+        if not user:
+            return
+        result = await session.scalars(
+            select(Playlist).where(Playlist.user_id == user.id).order_by(Playlist.id)
+        )
+        for playlist in result:
+            await message.answer(
+                f"🎵 {playlist.name}",
+                reply_markup=playlist_actions(playlist.id, language),
+            )
 
 
 @router.callback_query(lambda callback: callback.data in {"language:fa", "language:en"})
@@ -341,6 +385,35 @@ async def delete_song(callback: CallbackQuery) -> None:
             )
             await session.commit()
     await callback.message.edit_text(MESSAGES[language]["song_deleted"])
+    await callback.answer()
+
+
+@router.callback_query(lambda callback: callback.data and callback.data.startswith("song:play:"))
+async def send_song_again(callback: CallbackQuery) -> None:
+    """Send the selected audio file back to its owner."""
+    if not callback.from_user or not callback.message or not callback.data:
+        return
+    song_id = int(callback.data.rsplit(":", maxsplit=1)[1])
+    async with get_session() as session:
+        user = await session.scalar(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )
+        song = None
+        if user:
+            song = await session.scalar(
+                select(Song)
+                .join(Playlist, Song.playlist_id == Playlist.id)
+                .where(Song.id == song_id, Playlist.user_id == user.id)
+            )
+    if song is None:
+        await callback.answer("Song not found", show_alert=True)
+        return
+    await callback.message.answer_audio(
+        audio=song.file_id,
+        title=song.title,
+        performer=song.performer,
+        duration=song.duration,
+    )
     await callback.answer()
 
 

@@ -49,7 +49,7 @@ Make sure `.env` contains a valid token from BotFather.
 python main.py
 ```
 
-Then open your bot in Telegram and send `/start`. The first run creates the local `playlist_bot.db` database automatically. To add a song, open a playlist, choose **Add song**, and send an audio file.
+Then open your bot in Telegram and send `/start`. The first run creates the local `playlist_bot.db` database automatically. To add a song, open a playlist, choose **Add song**, and send an audio file. Use `/playlists` to open your playlists quickly.
 
 ## Project structure
 

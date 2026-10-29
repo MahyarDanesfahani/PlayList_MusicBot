@@ -39,9 +39,11 @@ def playlist_actions(playlist_id: int, language: str) -> InlineKeyboardMarkup:
 
 def song_actions(song_id: int, language: str) -> InlineKeyboardMarkup:
     """Return actions for one song."""
+    play_text = "▶️ Send again" if language == "en" else "▶️ ارسال آهنگ"
     text = "🗑 Delete" if language == "en" else "🗑 حذف"
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text=play_text, callback_data=f"song:play:{song_id}")],
             [InlineKeyboardButton(text=text, callback_data=f"song:delete:{song_id}")]
         ]
     )
