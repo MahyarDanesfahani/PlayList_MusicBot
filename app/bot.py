@@ -32,6 +32,12 @@ class SongAddition(StatesGroup):
     waiting_for_audio = State()
 
 
+class SongSearch(StatesGroup):
+    """State used while waiting for a song or performer search query."""
+
+    waiting_for_query = State()
+
+
 MESSAGES = {
     "fa": {
         "choose": "زبان خود را انتخاب کنید:",
@@ -52,6 +58,9 @@ MESSAGES = {
             "songs": "آهنگ‌های پلی‌لیست:",
             "no_songs": "این پلی‌لیست هنوز آهنگی ندارد.",
             "song_deleted": "آهنگ حذف شد.",
+            "ask_search": "نام آهنگ یا خواننده را برای جست‌وجو ارسال کن:",
+            "search_empty": "آهنگی با این عبارت پیدا نشد.",
+            "search_results": "نتایج جست‌وجو:",
     },
     "en": {
         "choose": "Please choose your language:",
@@ -72,6 +81,9 @@ MESSAGES = {
             "songs": "Playlist songs:",
             "no_songs": "This playlist has no songs yet.",
             "song_deleted": "Song deleted.",
+            "ask_search": "Send a song title or performer name to search:",
+            "search_empty": "No songs matched your search.",
+            "search_results": "Search results:",
     },
 }
 
@@ -189,6 +201,72 @@ async def create_playlist_start(callback: CallbackQuery, state: FSMContext) -> N
     await state.set_state(PlaylistCreation.waiting_for_name)
     await callback.message.answer(MESSAGES[language]["ask_name"])
     await callback.answer()
+
+
+@router.callback_query(lambda callback: callback.data == "song:search")
+async def search_song_start(callback: CallbackQuery, state: FSMContext) -> None:
+    """Ask the user for a song title or performer name."""
+    if not callback.from_user or not callback.message:
+        return
+    language = await get_user_language(callback.from_user.id)
+    await state.set_state(SongSearch.waiting_for_query)
+    await callback.message.answer(MESSAGES[language]["ask_search"])
+    await callback.answer()
+
+
+@router.message(Command("search"))
+async def search_command(message: Message, state: FSMContext) -> None:
+    """Start a song search from the command line."""
+    if not message.from_user:
+        return
+    language = await get_user_language(message.from_user.id)
+    await state.set_state(SongSearch.waiting_for_query)
+    await message.answer(MESSAGES[language]["ask_search"])
+
+
+@router.message(SongSearch.waiting_for_query)
+async def search_songs(message: Message, state: FSMContext) -> None:
+    """Search the user's songs by title or performer."""
+    if not message.from_user or not message.text:
+        return
+
+    query = message.text.strip()
+    language = await get_user_language(message.from_user.id)
+    if not query:
+        await message.answer(MESSAGES[language]["ask_search"])
+        return
+
+    async with get_session() as session:
+        user = await session.scalar(
+            select(User).where(User.telegram_id == message.from_user.id)
+        )
+        songs = []
+        if user:
+            result = await session.scalars(
+                select(Song)
+                .join(Playlist, Song.playlist_id == Playlist.id)
+                .where(
+                    Playlist.user_id == user.id,
+                    (Song.title.ilike(f"%{query}%"))
+                    | (Song.performer.ilike(f"%{query}%")),
+                )
+                .order_by(Song.id)
+            )
+            songs = list(result)
+
+    await state.clear()
+    if not songs:
+        await message.answer(MESSAGES[language]["search_empty"], reply_markup=main_menu(language))
+        return
+
+    await message.answer(MESSAGES[language]["search_results"])
+    for song in songs:
+        label = song.title or song.performer or "Untitled song"
+        if song.performer and song.title:
+            label = f"{song.title} — {song.performer}"
+        await message.answer(
+            f"🎵 {label}", reply_markup=song_actions(song.id, language)
+        )
 
 
 @router.message(PlaylistCreation.waiting_for_name)
