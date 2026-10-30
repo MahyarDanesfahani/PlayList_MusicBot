@@ -5,12 +5,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message
+from sqlalchemy import func
 from sqlalchemy import delete, select
 
 from app.config import get_bot_token
 from app.database.session import get_session
 from app.keyboards.language import language_keyboard
 from app.keyboards.playlist import main_menu, playlist_actions, song_actions
+from app.keyboards.recommendation import recommendation_keyboard
 from app.models.playlist import Playlist
 from app.models.song import Song
 from app.models.user import User
@@ -38,6 +40,12 @@ class SongSearch(StatesGroup):
     waiting_for_query = State()
 
 
+class SongRecommendation(StatesGroup):
+    """States used by the mood-based recommendation questionnaire."""
+
+    answering = State()
+
+
 MESSAGES = {
     "fa": {
         "choose": "زبان خود را انتخاب کنید:",
@@ -61,6 +69,12 @@ MESSAGES = {
             "ask_search": "نام آهنگ یا خواننده را برای جست‌وجو ارسال کن:",
             "search_empty": "آهنگی با این عبارت پیدا نشد.",
             "search_results": "نتایج جست‌وجو:",
+            "recommend_q1": "الان بیشتر دنبال چه حسی هستی؟",
+            "recommend_q2": "امروز انرژی‌ات چطور است؟",
+            "recommend_q3": "کدام فضا را بیشتر می‌پسندی؟",
+            "recommend_empty": "برای پیشنهاد دادن هنوز آهنگی در پلی‌لیست‌هایت نداری.",
+            "recommend_found": "فکر می‌کنم این آهنگ با حال‌وهوایت جور باشد:",
+            "recommend_no_match": "آهنگ کاملاً متناسب پیدا نشد، اما این گزینه را پیشنهاد می‌کنم:",
     },
     "en": {
         "choose": "Please choose your language:",
@@ -84,7 +98,35 @@ MESSAGES = {
             "ask_search": "Send a song title or performer name to search:",
             "search_empty": "No songs matched your search.",
             "search_results": "Search results:",
+            "recommend_q1": "What kind of feeling are you looking for?",
+            "recommend_q2": "How is your energy level today?",
+            "recommend_q3": "Which atmosphere do you prefer?",
+            "recommend_empty": "You do not have any songs in your playlists yet.",
+            "recommend_found": "I think this song matches your mood:",
+            "recommend_no_match": "I could not find an exact mood match, but try this song:",
     },
+}
+
+
+RECOMMENDATION_QUESTIONS = {
+    "fa": [
+        ("recommend_q1", [("🌿 آرامش", "calm"), ("😊 شادی", "happy"), ("💔 تخلیه احساسات", "sad"), ("⚡ هیجان", "energetic")]),
+        ("recommend_q2", [("🔋 زیاد", "energetic"), ("☕ متوسط", "calm"), ("🛋 کم", "sad")]),
+        ("recommend_q3", [("🌙 خلوت و شبانه", "calm"), ("🎉 مهمانی", "happy"), ("🏃 انگیزشی", "energetic"), ("💭 نوستالژیک", "sad")]),
+    ],
+    "en": [
+        ("recommend_q1", [("🌿 Calm", "calm"), ("😊 Happy", "happy"), ("💔 Emotional", "sad"), ("⚡ Energetic", "energetic")]),
+        ("recommend_q2", [("🔋 High", "energetic"), ("☕ Medium", "calm"), ("🛋 Low", "sad")]),
+        ("recommend_q3", [("🌙 Quiet and late-night", "calm"), ("🎉 Party", "happy"), ("🏃 Motivational", "energetic"), ("💭 Nostalgic", "sad")]),
+    ],
+}
+
+
+MOOD_KEYWORDS = {
+    "calm": ("آرام", "relax", "calm", "chill", "sleep", "lofi", "ambient", "acoustic"),
+    "happy": ("شاد", "happy", "joy", "dance", "party", "fun", "خنده", "شادی"),
+    "sad": ("غم", "sad", "heart", "broken", "emotional", "آهنگ غمگین", "دلتنگ"),
+    "energetic": ("energy", "rock", "جشن", "انرژی", "gym", "motiv", "power", "dance"),
 }
 
 
@@ -201,6 +243,106 @@ async def create_playlist_start(callback: CallbackQuery, state: FSMContext) -> N
     await state.set_state(PlaylistCreation.waiting_for_name)
     await callback.message.answer(MESSAGES[language]["ask_name"])
     await callback.answer()
+
+
+async def send_recommendation_question(
+    message: Message, language: str, question_index: int
+) -> None:
+    """Send one questionnaire question to the user."""
+    message_key, options = RECOMMENDATION_QUESTIONS[language][question_index]
+    await message.answer(
+        MESSAGES[language][message_key],
+        reply_markup=recommendation_keyboard(options),
+    )
+
+
+@router.callback_query(lambda callback: callback.data == "recommend:start")
+async def recommendation_start(callback: CallbackQuery, state: FSMContext) -> None:
+    """Start the mood questionnaire."""
+    if not callback.from_user or not callback.message:
+        return
+    language = await get_user_language(callback.from_user.id)
+    await state.set_data({"recommendation_index": 0, "moods": []})
+    await state.set_state(SongRecommendation.answering)
+    await send_recommendation_question(callback.message, language, 0)
+    await callback.answer()
+
+
+@router.callback_query(
+    SongRecommendation.answering,
+    lambda callback: callback.data and callback.data.startswith("recommend:answer:"),
+)
+async def recommendation_answer(callback: CallbackQuery, state: FSMContext) -> None:
+    """Store an answer and either ask the next question or send a recommendation."""
+    if not callback.from_user or not callback.message or not callback.data:
+        return
+
+    language = await get_user_language(callback.from_user.id)
+    mood = callback.data.rsplit(":", maxsplit=1)[1]
+    data = await state.get_data()
+    moods = list(data.get("moods", []))
+    moods.append(mood)
+    question_index = int(data.get("recommendation_index", 0)) + 1
+
+    if question_index < len(RECOMMENDATION_QUESTIONS[language]):
+        await state.update_data(recommendation_index=question_index, moods=moods)
+        await send_recommendation_question(callback.message, language, question_index)
+        await callback.answer()
+        return
+
+    await state.clear()
+    await send_recommended_song(callback.message, callback.from_user.id, language, moods)
+    await callback.answer()
+
+
+async def send_recommended_song(
+    message: Message, telegram_id: int, language: str, moods: list[str]
+) -> None:
+    """Choose and send the best matching song from the user's playlists."""
+    mood_scores = {mood: moods.count(mood) for mood in set(moods)}
+    preferred_mood = max(mood_scores, key=mood_scores.get)
+    keywords = MOOD_KEYWORDS[preferred_mood]
+
+    async with get_session() as session:
+        user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+        if user is None:
+            await message.answer(MESSAGES[language]["recommend_empty"], reply_markup=main_menu(language))
+            return
+
+        songs_result = await session.scalars(
+            select(Song)
+            .join(Playlist, Song.playlist_id == Playlist.id)
+            .where(Playlist.user_id == user.id)
+            .order_by(func.random())
+        )
+        songs = list(songs_result)
+
+    if not songs:
+        await message.answer(MESSAGES[language]["recommend_empty"], reply_markup=main_menu(language))
+        return
+
+    matching_songs = [
+        song
+        for song in songs
+        if any(
+            keyword.casefold() in f"{song.title or ''} {song.performer or ''}".casefold()
+            for keyword in keywords
+        )
+    ]
+    song = matching_songs[0] if matching_songs else songs[0]
+    message_key = "recommend_found" if matching_songs else "recommend_no_match"
+    label = song.title or song.performer or "Untitled song"
+    if song.performer and song.title:
+        label = f"{song.title} — {song.performer}"
+    await message.answer(MESSAGES[language][message_key])
+    await message.answer_audio(
+        audio=song.file_id,
+        title=song.title,
+        performer=song.performer,
+        duration=song.duration,
+        caption=f"🎵 {label}",
+    )
+    await message.answer(MESSAGES[language]["menu"], reply_markup=main_menu(language))
 
 
 @router.callback_query(lambda callback: callback.data == "song:search")

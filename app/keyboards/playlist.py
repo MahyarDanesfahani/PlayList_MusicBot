@@ -6,15 +6,16 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 def main_menu(language: str) -> InlineKeyboardMarkup:
     """Return the localized main menu."""
     if language == "en":
-        labels = ("➕ New playlist", "📚 My playlists", "🔎 Search songs")
+        labels = ("➕ New playlist", "📚 My playlists", "🔎 Search songs", "🎧 Recommend a song")
     else:
-        labels = ("➕ پلی‌لیست جدید", "📚 پلی‌لیست‌های من", "🔎 جست‌وجوی آهنگ")
+        labels = ("➕ پلی‌لیست جدید", "📚 پلی‌لیست‌های من", "🔎 جست‌وجوی آهنگ", "🎧 پیشنهاد آهنگ")
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=labels[0], callback_data="playlist:create")],
             [InlineKeyboardButton(text=labels[1], callback_data="playlist:list")],
             [InlineKeyboardButton(text=labels[2], callback_data="song:search")],
+            [InlineKeyboardButton(text=labels[3], callback_data="recommend:start")],
         ]
     )
 
