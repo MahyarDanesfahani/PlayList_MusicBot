@@ -18,6 +18,7 @@ async def init_db() -> None:
     """Create database tables if they do not exist yet."""
     from app.models.playlist import Playlist  # noqa: F401
     from app.models.song import Song  # noqa: F401
+    from app.models.song_note import SongNote  # noqa: F401
     from app.models.user import User  # noqa: F401
 
     async with engine.begin() as connection:

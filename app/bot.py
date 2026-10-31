@@ -15,6 +15,7 @@ from app.keyboards.playlist import main_menu, playlist_actions, song_actions
 from app.keyboards.recommendation import recommendation_keyboard
 from app.models.playlist import Playlist
 from app.models.song import Song
+from app.models.song_note import SongNote
 from app.models.user import User
 
 
@@ -46,6 +47,12 @@ class SongRecommendation(StatesGroup):
     answering = State()
 
 
+class SongNoteWriting(StatesGroup):
+    """State used while waiting for a personal song note."""
+
+    waiting_for_text = State()
+
+
 MESSAGES = {
     "fa": {
         "choose": "زبان خود را انتخاب کنید:",
@@ -75,6 +82,11 @@ MESSAGES = {
             "recommend_empty": "برای پیشنهاد دادن هنوز آهنگی در پلی‌لیست‌هایت نداری.",
             "recommend_found": "فکر می‌کنم این آهنگ با حال‌وهوایت جور باشد:",
             "recommend_no_match": "آهنگ کاملاً متناسب پیدا نشد، اما این گزینه را پیشنهاد می‌کنم:",
+            "ask_note": "حس و حالت را درباره این آهنگ بنویس:",
+            "note_saved": "یادداشتت ذخیره شد.",
+            "note_updated": "یادداشتت ویرایش شد.",
+            "note_empty": "یادداشت نمی‌تواند خالی باشد.",
+            "note_shown": "یادداشت قبلی تو برای این آهنگ:\n\n{note}",
     },
     "en": {
         "choose": "Please choose your language:",
@@ -104,6 +116,11 @@ MESSAGES = {
             "recommend_empty": "You do not have any songs in your playlists yet.",
             "recommend_found": "I think this song matches your mood:",
             "recommend_no_match": "I could not find an exact mood match, but try this song:",
+            "ask_note": "Write how you feel about this song:",
+            "note_saved": "Your note was saved.",
+            "note_updated": "Your note was updated.",
+            "note_empty": "The note cannot be empty.",
+            "note_shown": "Your previous note for this song:\n\n{note}",
     },
 }
 
@@ -608,6 +625,79 @@ async def delete_song(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+@router.callback_query(lambda callback: callback.data and callback.data.startswith("song:note:"))
+async def start_song_note(callback: CallbackQuery, state: FSMContext) -> None:
+    """Start writing or editing a private note for a song."""
+    if not callback.from_user or not callback.message or not callback.data:
+        return
+    song_id = int(callback.data.rsplit(":", maxsplit=1)[1])
+    language = await get_user_language(callback.from_user.id)
+    async with get_session() as session:
+        song = await session.scalar(
+            select(Song)
+            .join(Playlist, Song.playlist_id == Playlist.id)
+            .join(User, Playlist.user_id == User.id)
+            .where(Song.id == song_id, User.telegram_id == callback.from_user.id)
+        )
+    if song is None:
+        await callback.answer("Song not found", show_alert=True)
+        return
+    await state.update_data(song_id=song_id)
+    await state.set_state(SongNoteWriting.waiting_for_text)
+    await callback.message.answer(MESSAGES[language]["ask_note"])
+    await callback.answer()
+
+
+@router.message(SongNoteWriting.waiting_for_text)
+async def save_song_note(message: Message, state: FSMContext) -> None:
+    """Create or update a user's private note for a song."""
+    if not message.from_user or message.text is None:
+        return
+    language = await get_user_language(message.from_user.id)
+    note_text = message.text.strip()
+    if not note_text:
+        await message.answer(MESSAGES[language]["note_empty"])
+        return
+    if len(note_text) > 2000:
+        await message.answer(
+            "یادداشت حداکثر ۲۰۰۰ کاراکتر باشد."
+            if language == "fa"
+            else "The note must be at most 2000 characters."
+        )
+        return
+
+    data = await state.get_data()
+    song_id = data.get("song_id")
+    if song_id is None:
+        await state.clear()
+        return
+
+    async with get_session() as session:
+        song = await session.scalar(
+            select(Song)
+            .join(Playlist, Song.playlist_id == Playlist.id)
+            .join(User, Playlist.user_id == User.id)
+            .where(Song.id == song_id, User.telegram_id == message.from_user.id)
+        )
+        if song is None:
+            await state.clear()
+            return
+        user = await session.scalar(select(User).where(User.telegram_id == message.from_user.id))
+        note = await session.scalar(
+            select(SongNote).where(SongNote.user_id == user.id, SongNote.song_id == song_id)
+        )
+        was_existing = note is not None
+        if note is None:
+            session.add(SongNote(user_id=user.id, song_id=song_id, text=note_text))
+        else:
+            note.text = note_text
+        await session.commit()
+
+    await state.clear()
+    message_key = "note_updated" if was_existing else "note_saved"
+    await message.answer(MESSAGES[language][message_key], reply_markup=main_menu(language))
+
+
 @router.callback_query(lambda callback: callback.data and callback.data.startswith("song:play:"))
 async def send_song_again(callback: CallbackQuery) -> None:
     """Send the selected audio file back to its owner."""
@@ -619,12 +709,19 @@ async def send_song_again(callback: CallbackQuery) -> None:
             select(User).where(User.telegram_id == callback.from_user.id)
         )
         song = None
+        note = None
         if user:
             song = await session.scalar(
                 select(Song)
                 .join(Playlist, Song.playlist_id == Playlist.id)
                 .where(Song.id == song_id, Playlist.user_id == user.id)
             )
+            if song:
+                note = await session.scalar(
+                    select(SongNote).where(
+                        SongNote.user_id == user.id, SongNote.song_id == song.id
+                    )
+                )
     if song is None:
         await callback.answer("Song not found", show_alert=True)
         return
@@ -634,6 +731,9 @@ async def send_song_again(callback: CallbackQuery) -> None:
         performer=song.performer,
         duration=song.duration,
     )
+    if note:
+        language = await get_user_language(callback.from_user.id)
+        await callback.message.answer(MESSAGES[language]["note_shown"].format(note=note.text))
     await callback.answer()
 
 
